@@ -21,15 +21,14 @@ variables:
   tolerance: 1
   target_tado: !input target_tado
   source_temp_sensor: !input source_temp_sensor
-  #early_start: ("binary_sensor." ~ target_tado ~ "_early_start")|regex_replace("climate.", ignorecase=True)
-  tado_temp: "{{ state_attr(target_tado, 'current_temperature') | float }}" # Temp tado thinks it's at
-  current_offset: "{{ state_attr(target_tado, 'offset_celsius') }}" # Tado sensors offset
+  tado_temp: "{{ state_attr(target_tado, current_temperature) | float }}" # Temp tado thinks it's at
+  current_offset: "{{ state_attr(target_tado, offset_celsius) }}" # Tado sensors offset
   tado_real_temp: "{{ ( tado_temp - current_offset) | float }}" # The temperature measured at the tado sensor
   actual_temp: "{{ states(source_temp_sensor) | float }}" # Temperature measured by the other sensor
   offset: "{{ ( actual_temp - tado_temp ) | round }}" # Difference between the two sensors, as they are currently calibrated
   calculated_offset: "{{ (offset + current_offset ) | round }}" # The offset needed on the tado sensor to best equilibrate the two sensor measurements
   #raw_calculated_offset: "{{ (offset + current_offset ) | round }}" # The offset needed on the tado sensor to best equilibrate the two sensor measurements
-  #calculated_offset: "{% if (tado_real_temp - actual_temp) | float > 1 %}{{raw_calculated_offset * 2}}{% else %}{{raw_calculated_offset}}{% endif %}" # If the the tado sensor temperature is alot higher than the other sensor, the double the offset, this causes the tado to aim to overshoot the temperature and reduces the chance of it going on and off many times
+  #calculated_offset: "{% if (tado_real_temp - actual_temp) | float > 1 %}{{raw_calculated_offset * 2}}{% else %}{{raw_calculated_offset}}{% endif %}" # If the the tado sensor temperature is alot higher than the other sensor, then double the offset, this causes the tado to aim to overshoot the temperature and reduces the chance of it going on and off many times
 
 trigger:
 - platform: state
@@ -52,8 +51,8 @@ condition:
 # Only run if temp states are a number i.e. hasn't become 'unavailable'
 - "{{ tado_temp|int != 0 or tado_temp == '0' }}"
 - "{{ actual_temp|int != 0 or actual_temp == '0' }}"
-# Only run if the climate device is preset is 'home' or if 'early start' has been activated or offset is more than a difference of 2
-- "{{ state_attr(target_tado, 'preset_mode') == 'home' or states(early_start) == 'on' or offset|float >= 2 or offset|float <= -2}}"
+# Only run if the climate device is preset is 'home' or offset is more than a difference of 2
+- "{{ state_attr(target_tado, 'preset_mode') == 'home' or offset|float >= 2 or offset|float <= -2}}"
 # Only run if new offset is different to current offset
 - "{{ offset != 0 }}"
 # Only run if there is a difference in temperature greater than the tolerance
