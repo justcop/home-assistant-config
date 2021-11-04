@@ -26,7 +26,7 @@ variables:
   tado_real_temp: "{{ (state_attr(target_tado, 'current_temperature')| float(0) - state_attr(target_tado, 'offset_celsius') | float(0)) }}" # The temperature measured at the tado sensor
   actual_temp: "{{ states(source_temp_sensor) | float(0) }}" # Temperature measured by the other sensor
   offset: "{{ (states(source_temp_sensor) | float(0) - state_attr(target_tado, 'current_temperature') | float(0)) | round }}" # Difference between the two sensors, as they are currently calibrated
-  calculated_offset: "{{ (offset + current_offset) | round }}" # The offset needed on the tado sensor to best equilibrate the two sensor measurements
+  calculated_offset: "{{ ((states(source_temp_sensor) | float(0) - state_attr(target_tado, 'current_temperature') | float(0)) | round + state_attr(target_tado, 'offset_celsius') | float(0)) | round }}" # The offset needed on the tado sensor to best equilibrate the two sensor measurements
   #raw_calculated_offset: "{{ (offset + current_offset) | round }}" # The offset needed on the tado sensor to best equilibrate the two sensor measurements
   #calculated_offset: "{% if (tado_real_temp - actual_temp) | float > 1 %}{{raw_calculated_offset * 2}}{% else %}{{raw_calculated_offset}}{% endif %}" # If the the tado sensor temperature is alot higher than the other sensor, then double the offset, this causes the tado to aim to overshoot the temperature and reduces the chance of it going on and off many times
 
