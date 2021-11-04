@@ -1,5 +1,5 @@
 blueprint:
-  name: Tado temperature offset beta
+  name: Tado temperature offset
   description: Ensure the Tado smart valve has the temp of a separate sensor
   domain: automation
   input:
