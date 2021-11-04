@@ -88,4 +88,4 @@ action:
   data:
     offset: "{{ calculated_offset }}"
     entity_id: "{{ target_tado }}"
-- delay: 60 
+- delay: 60
