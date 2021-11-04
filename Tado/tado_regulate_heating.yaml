@@ -23,7 +23,7 @@ variables:
   source_temp_sensor: !input source_temp_sensor
   tado_temp: "{{ state_attr(target_tado, 'current_temperature') | float }}" # Temp tado thinks it's at
   current_offset: "{{ state_attr(target_tado, 'offset_celsius') | float }}" # Tado sensors offset
-  tado_real_temp: "{{ (state_attr(target_tado, 'current_temperature') - state_attr(target_tado, 'offset_celsius')) | float }}" # The temperature measured at the tado sensor
+  tado_real_temp: "{{ (state_attr(target_tado, 'current_temperature')| float - state_attr(target_tado, 'offset_celsius') | float) }}" # The temperature measured at the tado sensor
   actual_temp: "{{ states(source_temp_sensor) | float }}" # Temperature measured by the other sensor
   offset: "{{ (states(source_temp_sensor) | float - state_attr(target_tado, 'current_temperature') | float) | round }}" # Difference between the two sensors, as they are currently calibrated
   calculated_offset: "{{ (offset + current_offset) | round }}" # The offset needed on the tado sensor to best equilibrate the two sensor measurements
