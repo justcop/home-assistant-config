@@ -1,152 +1,91 @@
-# Regulate tado heating equipment based on external sensors.
-
-# For this to work you need to use a standard naming convention for every tado/external thermostat pairing. So each of them must be names the same i.e. 'bedroom'
-# Then that should be followed by a consistent name space. I use the standard '_temperature' for tado and '_temperature_measurement' for external thermostat
-# NB If you use something else you need to update the name space variables below
-
-# I have made it so you can have a different settings for each room, just create a setting for it on that device (in the settings json variable)
-# i.e. you could have the main house thermostat not have battery saver mode on as it doesnt have a motor to worry about so:
-#          'house': {'battery_saver': false}
-#      this will override the default battery_saver setting for just 'house' object_id
-#
-# WARNING: It seems every time the offset is updated the device will recalibrate so will open/close each time, this will drain the batteries faster.
-#    the default tolerance is set at 0.3 here, which is quite low and will mean more calls to update offset, you may want to allow higher tolerance to help battery life
-#    or use the battery_saver option (see conditions for explanation) or a combination of settings that suit your need
-#
-#   The automation is set as a queued automation with many triggers. It has a delay at the end to allow the Tado device and integration time to sync up
-#   the same room could get triggered multiple times, this delay and queue allows time between each run and will prevent multiple offset updates
-#   NB queue only queues the action section, hence having some conditions to cancel as soon as triggered if needed and also repeated in action
-
-  - id: automation.regulate_heating
-    alias: Regulate Heating
-    mode: queued
-    max: 25
-    # List of all sensors to use to trigger (tado temp sensor and external temp sensor for each room)
-    trigger:
-    - platform: state
-      entity_id:
-        - sensor.house_temperature
-        - sensor.house_temperature_measurement      
-        - sensor.bedroom_temperature
-        - sensor.bedroom_temperature_measurement      
-        - sensor.guest_bedroom_temperature
-        - sensor.guest_bedroom_temperature_measurement      
-        - sensor.back_bedroom_temperature
-        - sensor.back_bedroom_temperature_measurement      
-    # Because I have a condition to only adjust offset when in auto, I also want to trigger when any are set back to auto
-    - platform: state
-      entity_id:
-        - climate.house
-        - climate.bedroom
-        - climate.guest_bedroom
-        - climate.back_bedroom
-      to: auto 
-    # Because I have a condition to only adjust offset when in home mode, I also want to trigger when I get home to immediately sync temp
-    - platform: state
-      entity_id: 
-        - climate.house
-        - climate.bedroom
-        - climate.guest_bedroom
-        - climate.back_bedroom
-      attribute: preset_mode
-      to: home
-    # With one of the battery saver conditions being to only update offset if the change would impact hvac_action
-    #   I want to trigger checking again if hvac_action changes, but only for ones with battery saver mode on
-    - platform: state
-      entity_id: 
-        - climate.bedroom
-        - climate.guest_bedroom
-        - climate.back_bedroom
-      attribute: hvac_action
-   # Variables that can be set straight away and can be used in overall condition tests 
-    variables:
-        # You can configure your settings here, if settings don't exists for the device then 'default' is used
-        # If you dont want different settings in any room, then you only need to set default thats it.
-        settings: >
-            {{ {
-            'default': 
-              {'tolerance': 0.3, 'battery_saver': true, 'back_off_secs': 900, 'climate_ns': '_temperature', 'sensor_ns': '_temperature_measurement',},
-            'house': 
-              {'battery_saver': false, 'tolerance': 0.2},
-            } }}
-        o_id: >
-            {% for obj in settings %}
-            {% set climate_ns = settings[obj].climate_ns if settings[obj].climate_ns is defined else settings['default'].climate_ns %}
-            {% set sensor_ns = settings[obj].sensor_ns if settings[obj].sensor_ns is defined else settings['default'].sensor_ns %}
-            {% if trigger.to_state.object_id == obj %}
-            {{ trigger.to_state.object_id }}
-            {% elif trigger.to_state.object_id == obj + climate_ns or trigger.to_state.object_id == obj + sensor_ns %}
-            {{ obj }}
-            {% endif %}
-            {% endfor %}
-        object_id: >
-            {% if o_id != '' %}
-            {{ o_id }}
-            {% elif trigger.to_state.object_id.endswith(settings['default'].climate_ns) %}
-            {{ trigger.to_state.object_id[:-(settings['default'].climate_ns|length)] }}
-            {% elif trigger.to_state.object_id.endswith(settings['default'].sensor_ns) %}
-            {{ trigger.to_state.object_id[:-(settings['default'].sensor_ns|length)] }}
-            {% else %}
-            {{ trigger.to_state.object_id }}
-            {% endif %}
-        tolerance: "{{ settings.get(object_id).tolerance if settings.get(object_id).tolerance is defined else settings.get('default').tolerance }}"
-        back_off_secs: "{{ settings.get(object_id).back_off_secs if settings.get(object_id).back_off_secs is defined else settings.get('default').back_off_secs }}"
-        climate_ns: "{{ settings.get(object_id).climate_ns if settings.get(object_id).climate_ns is defined else settings.get('default').climate_ns }}"
-        sensor_ns: "{{ settings.get(object_id).sensor_ns if settings.get(object_id).sensor_ns is defined else settings.get('default').sensor_ns }}"
-        battery_saver: "{{ settings.get(object_id).battery_saver if settings.get(object_id).battery_saver is defined else settings.get('default').battery_saver }}"
-        climate_id: "{{ 'climate.' + object_id }}"
-        climate_sensor_id: "{{ 'sensor.' + object_id + climate_ns }}"
-        sensor_id: "{{ 'sensor.' + object_id + sensor_ns }}"
-    
-    # Conditions to check initially and cancel out the run if needed.
-    # NB they will be recheck again in action in case anything changed while waiting to run
-    #    so if you decide to remove any, make sure you remove in both
-    condition:
-    # Only run if temp states are a number i.e. hasn't become 'unavailable'
-    - "{{ states(sensor_id)|int != 0 or states(sensor_id) == '0' }}"
-    - "{{ states(climate_sensor_id)|int != 0 or states(climate_sensor_id) == '0' }}"
-    # Only run if the climate device is set to 'auto' and preset is 'home'
-    - "{{ states(climate_id) == 'auto' and state_attr(climate_id, 'preset_mode') == 'home' }}"
-    # Queuing only queues the action section so some variables need to be created here so caculated at relevant time
-    action:
-    - variables:
-        offset: "{{ ((states(sensor_id)|float - states(climate_sensor_id)|float) + state_attr(climate_id, 'offset_celsius')|float)|round(1) }}"
-        new_temp: "{{ state_attr(climate_id, 'current_temperature') - state_attr(climate_id, 'offset_celsius') + offset|float }}"
-        last_updated: >
-          {{ state_attr(climate_id, 'offset_last_changed') if state_attr(climate_id, 'offset_last_changed') != None else utcnow() - timedelta(seconds=(back_off_secs|int +100)) }}
-
-    # All conditions are optional, so just delete the ones you don't want to use
-    - condition: and
-      conditions:
-        # Only run if temp states are a number (is also check before queuing so if you remove, you need to remove from there too)
-        - "{{ states(sensor_id)|int != 0 or states(sensor_id) == '0' }}"
-        - "{{ states(climate_sensor_id)|int != 0 or states(climate_sensor_id) == '0' }}"
-        # Only run if the climate device is set to 'auto' and preset is 'home' (is also check before queuing so if you remove, you need to remove from there too)
-        - "{{ states(climate_id) == 'auto' and state_attr(climate_id, 'preset_mode') == 'home' }}"
-        # Only run if new_offset is different to current offset
-        - "{{ state_attr(climate_id, 'offset_celsius')|float != offset|float }}"
-        # Only run if there is a difference in temperature greater than the tolerance
-        - "{{ (states(sensor_id)|float - states(climate_sensor_id)|float)|abs > tolerance }}"
-        # BATTERY SAVER: The following are if battery saver is set to true for the device
-        # Only run if offset hasn't been changed for longer than back_off
-        - "{{ (as_timestamp(last_updated) < as_timestamp(utcnow() - timedelta(seconds=back_off_secs|int))) if battery_saver else true }}"
-        # Only change the offset if it is going to make a difference to hvac action (so will send above or below target temp based on current hvac action state)
-        - "{{ ((state_attr(climate_id, 'hvac_action') == 'heating' and new_temp|float >= state_attr(climate_id, 'temperature')|float) or (state_attr(climate_id, 'hvac_action') == 'idle' and new_temp|float <= state_attr(climate_id, 'temperature')|float)) if battery_saver else true }}"
-        
-    # Optional add it to logbook
-    - service: logbook.log
-      data:
-          name: "{{ states[climate_id].name }}"
-          message: >    
-            is currently {{ state_attr(climate_id, 'hvac_action') }} with temp {{ states(climate_sensor_id) }} but room is {{ states(sensor_id) }}
-            changing offset from {{ state_attr(climate_id, 'offset_celsius') }} to {{ offset }}
-          entity_id: >
-            {{ climate_id }}
+blueprint:
+  name: Tado temperature offset beta
+  description: Ensure the Tado smart valve has the temp of a separate sensor
+  domain: automation
+  input:
+    source_temp_sensor:
+      name: Source Temperature sensor
+      description: This sensor will be used as the source.
+      selector:
+        entity:
+          domain: sensor
+          device_class: temperature
+    target_tado:
+      name: Tado
+      description: The Tado to set the offset on.
+      selector:
+        entity:
           domain: climate
-    # Set the offset
-    - service: tado.set_climate_temperature_offset
-      data:
-        entity_id: "{{ climate_id}}"
-        offset: "{{ offset }}"
-    # Stop re triggers for a period allowing offset to have some effect and Tado Integration to refresh, new runs will be queued
-    - delay: 60
+
+variables:
+  tolerance: 1
+  target_tado: !input target_tado
+  source_temp_sensor: !input source_temp_sensor
+  #early_start: ("binary_sensor." ~ target_tado ~ "_early_start")|regex_replace("climate.", ignorecase=True)
+  tado_temp: "{{ state_attr(target_tado, 'current_temperature') | float }}" # Temp tado thinks it's at
+  current_offset: "{{ state_attr(target_tado, 'offset_celsius') }}" # Tado sensors offset
+  tado_real_temp: "{{ ( tado_temp - current_offset) | float }}" # The temperature measured at the tado sensor
+  actual_temp: "{{ states(source_temp_sensor) | float }}" # Temperature measured by the other sensor
+  offset: "{{ ( actual_temp - tado_temp ) | round }}" # Difference between the two sensors, as they are currently calibrated
+  calculated_offset: "{{ (offset + current_offset ) | round }}" # The offset needed on the tado sensor to best equilibrate the two sensor measurements
+  #raw_calculated_offset: "{{ (offset + current_offset ) | round }}" # The offset needed on the tado sensor to best equilibrate the two sensor measurements
+  #calculated_offset: "{% if (tado_real_temp - actual_temp) | float > 1 %}{{raw_calculated_offset * 2}}{% else %}{{raw_calculated_offset}}{% endif %}" # If the the tado sensor temperature is alot higher than the other sensor, the double the offset, this causes the tado to aim to overshoot the temperature and reduces the chance of it going on and off many times
+  last_updated: "{{ state_attr(source_temp_sensor, 'offset_last_changed') if state_attr(source_temp_sensor, 'offset_last_changed') != None else utcnow() - timedelta(seconds=(900|int +100)) }}"
+
+trigger:
+- platform: state
+  entity_id: !input target_tado
+  attribute: current_temperature
+- platform: state
+  entity_id: !input source_temp_sensor
+  # Because I have a condition to only adjust offset when in home mode, I also want to trigger when I get home to immediately sync temp
+- platform: state
+  entity_id: !input target_tado
+  attribute: preset_mode
+  to: home
+- platform: state
+  entity_id: !input target_tado
+  attribute: hvac_action
+- platform: template
+  value_template: "{{ offset >= 1 }}" 
+
+condition: 
+# Only run if temp states are a number i.e. hasn't become 'unavailable'
+- "{{ tado_temp|int != 0 or tado_temp == '0' }}"
+- "{{ actual_temp|int != 0 or actual_temp == '0' }}"
+# Only run if the climate device is preset is 'home' or if 'early start' has been activated or offset is more than a difference of 2
+- "{{ state_attr(target_tado, 'preset_mode') == 'home' or states(early_start) == 'on' or offset|float >= 2 or offset|float <= -2}}"
+# Only run if new offset is different to current offset
+- "{{ offset != 0 }}"
+# Only run if there is a difference in temperature greater than the tolerance
+- "{{ (actual_temp - tado_temp)|abs > tolerance }}"
+# Only run if offset hasn't been changed for longer than 15 minutes
+- "{{ ( as_timestamp(now()) - as_timestamp(state_attr('this', 'last_triggered')) |int(0) ) > 900 }}"
+# Only change the offset if it is going to make a difference to hvac action (so will send above or below target temp based on current hvac action state)
+- "{{ (state_attr(target_tado, 'hvac_action') == 'heating' and (tado_temp + calculated_offset) >= state_attr(target_tado, 'temperature')|float) or ((state_attr(target_tado, 'hvac_action') == 'idle' and (tado_temp + calculated_offset) <= state_attr(target_tado, 'temperature')|float))}}"
+
+action:
+- service: system_log.write
+  data:
+    message: >
+      {{ target_tado }} has temp difference of {{ offset }}. Setting offset to {{ calculated_offset }}
+    level: info
+    logger: blueprints.tado.offset
+- service: system_log.write
+  data:
+    message: >
+      target: {{ target_tado }} 
+      source: {{ source_temp_sensor }}
+      temp difference: {{ offset }}
+      actual_temp: {{ actual_temp }}
+      tado_temp: {{ tado_temp }}
+      current_offset: {{ current_offset }}
+      calculated_offset: {{ calculated_offset }}
+      heating_state : {{ state_attr(target_tado, 'hvac_action') }}
+    level: debug
+    logger: blueprints.tado.offset
+- service: tado.set_climate_temperature_offset
+  data:
+    offset: "{{ calculated_offset }}"
+    entity_id: "{{ target_tado }}"
+  - delay: 60 
